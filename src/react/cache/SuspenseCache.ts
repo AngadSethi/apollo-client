@@ -1,5 +1,5 @@
 import { Trie } from '@wry/trie';
-import { ObservableQuery } from '../../core';
+import { ObservableQuery, ApolloQueryResult } from '../../core';
 import { canUseWeakMap } from '../../utilities';
 import { QuerySubscription } from './QuerySubscription';
 
@@ -49,5 +49,13 @@ export class SuspenseCache {
     }
 
     return this.subscriptions.get(stableCacheKey)! as QuerySubscription<TData>;
+  }
+
+  getSubscriptionFromPromise<TData>(
+    promise: Promise<ApolloQueryResult<TData>>
+  ) {
+    return Array.from(this.subscriptions.values()).find(
+      (subscription) => subscription.promise === promise
+    );
   }
 }
