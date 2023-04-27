@@ -16,12 +16,13 @@ import {
 import { ApolloProvider } from '../../context';
 import { SuspenseCache } from '../../cache';
 import { InMemoryCache } from '../../../cache';
+import { QuerySubscription } from '../../cache/QuerySubscription';
 
-function wait(delay: number) {
-  return new Promise((resolve) => setTimeout(resolve, delay));
-}
+// function wait(delay: number) {
+//   return new Promise((resolve) => setTimeout(resolve, delay));
+// }
 
-function renderIntegrationTest<Result>({
+function renderIntegrationTest({
   client,
   variables,
 }: {
@@ -79,19 +80,19 @@ function renderIntegrationTest<Result>({
   }
 
   function Child({
-    promise,
+    subscription,
   }: {
-    promise: Promise<ApolloQueryResult<QueryData>>;
+    subscription: QuerySubscription<QueryData>;
   }) {
-    const { data } = useReadQuery<QueryData>(promise);
+    const { data } = useReadQuery<QueryData>(subscription);
     return <div>{data.foo.bar}</div>;
   }
 
   function Parent() {
-    const { promise } = useBackgroundQuery(query);
+    const { subscription } = useBackgroundQuery(query);
     // count renders in the parent component
     renders.count++;
-    return <Child promise={promise} />;
+    return <Child subscription={subscription} />;
   }
 
   function ParentWithVariables({
@@ -99,10 +100,10 @@ function renderIntegrationTest<Result>({
   }: {
     variables: Record<string, unknown>;
   }) {
-    const { promise } = useBackgroundQuery(query, { variables });
+    const { subscription } = useBackgroundQuery(query, { variables });
     // count renders in the parent component
     renders.count++;
-    return <Child promise={promise} />;
+    return <Child subscription={subscription} />;
   }
 
   function App({ variables }: { variables?: Record<string, unknown> }) {
@@ -125,12 +126,10 @@ function renderIntegrationTest<Result>({
   return { ...rest, query, client: _client, renders };
 }
 
-function renderVariablesIntegrationTest<Result>({
+function renderVariablesIntegrationTest({
   variables,
-  client,
 }: {
   variables: { id: string };
-  client?: ApolloClient<NormalizedCacheObject>;
 }) {
   const CHARACTERS = ['Spider-Man', 'Black Widow', 'Iron Man', 'Hulk'];
 
@@ -159,12 +158,10 @@ function renderVariablesIntegrationTest<Result>({
     result: { data: { character: { id: String(index + 1), name } } },
   }));
   const suspenseCache = new SuspenseCache();
-  const _client =
-    client ||
-    new ApolloClient({
-      cache: new InMemoryCache(),
-      link: new MockLink(mocks),
-    });
+  const client = new ApolloClient({
+    cache: new InMemoryCache(),
+    link: new MockLink(mocks),
+  });
   interface Renders {
     errors: Error[];
     errorCount: number;
@@ -191,28 +188,28 @@ function renderVariablesIntegrationTest<Result>({
   }
 
   function Child({
-    promise,
+    subscription,
   }: {
-    promise: Promise<ApolloQueryResult<QueryData>>;
+    subscription: QuerySubscription<QueryData>;
   }) {
-    const { data } = useReadQuery<QueryData>(promise);
+    const result = useReadQuery<QueryData>(subscription);
     return (
       <div>
-        {data.character.id} - {data.character.name}
+        {result?.data?.character.id} - {result?.data?.character.name}
       </div>
     );
   }
 
   function ParentWithVariables({ variables }: { variables: QueryVariables }) {
-    const { promise } = useBackgroundQuery(query, { variables });
+    const { subscription } = useBackgroundQuery(query, { variables });
     // count renders in the parent component
     renders.count++;
-    return <Child promise={promise} />;
+    return <Child subscription={subscription} />;
   }
 
   function App({ variables }: { variables: QueryVariables }) {
     return (
-      <ApolloProvider client={_client} suspenseCache={suspenseCache}>
+      <ApolloProvider client={client} suspenseCache={suspenseCache}>
         <ErrorBoundary {...errorBoundaryProps}>
           <Suspense fallback={<SuspenseFallback />}>
             <ParentWithVariables variables={variables} />
@@ -223,7 +220,7 @@ function renderVariablesIntegrationTest<Result>({
   }
 
   const { ...rest } = render(<App variables={variables} />);
-  return { ...rest, query, App, client: _client, renders };
+  return { ...rest, query, App, client, renders };
 }
 
 describe('useBackgroundQuery', () => {
@@ -248,9 +245,9 @@ describe('useBackgroundQuery', () => {
       ),
     });
 
-    const { promise } = result.current;
+    const { subscription } = result.current;
 
-    const _result = await promise;
+    const _result = await subscription.promises.main;
 
     expect(_result).toEqual({
       data: { hello: 'world 1' },
@@ -294,9 +291,9 @@ describe('useBackgroundQuery', () => {
           }
         );
 
-        const { promise } = result.current;
+        const { subscription } = result.current;
 
-        const _result = await promise;
+        const _result = await subscription.promises.main;
 
         expect(_result).toEqual({
           data: { hello: 'from link' },
@@ -338,9 +335,9 @@ describe('useBackgroundQuery', () => {
           }
         );
 
-        const { promise } = result.current;
+        const { subscription } = result.current;
 
-        const _result = await promise;
+        const _result = await subscription.promises.main;
 
         expect(_result).toEqual({
           data: { hello: 'from cache' },
@@ -388,9 +385,9 @@ describe('useBackgroundQuery', () => {
           }
         );
 
-        const { promise } = result.current;
+        const { subscription } = result.current;
 
-        const _result = await promise;
+        const _result = await subscription.promises.main;
 
         expect(_result).toEqual({
           data: { foo: 'bar', hello: 'from link' },
@@ -432,9 +429,9 @@ describe('useBackgroundQuery', () => {
           }
         );
 
-        const { promise } = result.current;
+        const { subscription } = result.current;
 
-        const _result = await promise;
+        const _result = await subscription.promises.main;
 
         expect(_result).toEqual({
           data: { hello: 'from link' },
@@ -479,9 +476,9 @@ describe('useBackgroundQuery', () => {
           }
         );
 
-        const { promise } = result.current;
+        const { subscription } = result.current;
 
-        const _result = await promise;
+        const _result = await subscription.promises.main;
 
         expect(_result).toEqual({
           data: { hello: 'from link' },
@@ -539,8 +536,7 @@ describe('useBackgroundQuery', () => {
     expect(renders.suspenseCount).toBe(1);
   });
 
-  it('reacts to variables updates', async () => {
-    // TODO: this test triggers the warning re: promise not stable across renders
+  it.only('reacts to variables updates', async () => {
     const { App, renders, rerender } = renderVariablesIntegrationTest({
       variables: { id: '1' },
     });

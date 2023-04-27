@@ -1,4 +1,4 @@
-import { useMemo, useRef, useCallback } from 'react';
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
   ApolloClient,
   DocumentNode,
@@ -20,6 +20,7 @@ import {
 import { useDeepMemo, useStrictModeSafeCleanupEffect, __use } from './internal';
 import { useSuspenseCache } from './useSuspenseCache';
 import { SuspenseCache } from '../cache';
+import { canonicalStringify } from '../../cache';
 
 const DEFAULT_FETCH_POLICY = 'cache-first';
 const DEFAULT_SUSPENSE_POLICY = 'always';
@@ -57,6 +58,8 @@ function useTrackedSubscriptions(subscription: QuerySubscription) {
   };
 }
 
+// posible re-naming: useSuspenseWatchQueryOptions to indicate
+// they're a bit more limited due to Suspense use cases
 function useWatchQueryOptions<TData, TVariables extends OperationVariables>({
   query,
   options,
@@ -70,38 +73,12 @@ function useWatchQueryOptions<TData, TVariables extends OperationVariables>({
   const watchQueryOptions = useDeepMemo<
     WatchQueryOptions<TVariables, TData>
   >(() => {
-    const {
-      errorPolicy,
-      fetchPolicy,
-      suspensePolicy = DEFAULT_SUSPENSE_POLICY,
-      variables,
-      ...watchQueryOptions
-    } = options;
-
     return {
-      ...watchQueryOptions,
+      ...options,
       query,
-      errorPolicy:
-        errorPolicy || defaultOptions?.errorPolicy || DEFAULT_ERROR_POLICY,
-      fetchPolicy:
-        fetchPolicy || defaultOptions?.fetchPolicy || DEFAULT_FETCH_POLICY,
-      notifyOnNetworkStatusChange: suspensePolicy === 'always',
-      // By default, `ObservableQuery` will run `reobserve` the first time
-      // something `subscribe`s to the observable, which kicks off a network
-      // request. This creates a problem for suspense because we need to begin
-      // fetching the data immediately so we can throw the promise on the first
-      // render. Since we don't subscribe until after we've unsuspended, we need
-      // to avoid kicking off another network request for the same data we just
-      // fetched. This option toggles that behavior off to avoid the `reobserve`
-      // when the observable is first subscribed to.
-      fetchOnFirstSubscribe: false,
-      variables: compact({ ...defaultOptions?.variables, ...variables }),
+      notifyOnNetworkStatusChange: false,
     };
   }, [options, query, defaultOptions]);
-
-  // if (__DEV__) {
-  // validateOptions(watchQueryOptions);
-  // }
 
   return watchQueryOptions;
 }
@@ -112,8 +89,8 @@ export interface UseBackgroundQueryResult<
   TData = any,
   TVariables extends OperationVariables = OperationVariables
 > {
-  promise: Promise<ApolloQueryResult<TData>>;
-  observable: ObservableQuery<TData, TVariables>;
+  subscription: QuerySubscription<TData>;
+  // observable: ObservableQuery<TData, TVariables>;
   fetchMore: ObservableQueryFields<TData, TVariables>['fetchMore'];
   refetch: ObservableQueryFields<TData, TVariables>['refetch'];
 }
@@ -129,12 +106,14 @@ export function useBackgroundQuery_experimental<
   const client = useApolloClient(options.client);
   const watchQueryOptions = useWatchQueryOptions({ query, options, client });
   const { variables } = watchQueryOptions;
+  const { queryKey = [] } = options;
 
-  const subscription = suspenseCache.getSubscription(
-    client,
-    query,
-    variables,
-    () => client.watchQuery(watchQueryOptions)
+  const cacheKey = (
+    [client, query, canonicalStringify(variables)] as any[]
+  ).concat(queryKey);
+
+  const subscription = suspenseCache.getSubscription(cacheKey, () =>
+    client.watchQuery(watchQueryOptions)
   );
 
   const dispose = useTrackedSubscriptions(subscription);
@@ -149,41 +128,32 @@ export function useBackgroundQuery_experimental<
     (variables) => subscription.refetch(variables),
     [subscription]
   );
-
+  const version = 'main';
+  subscription.version = version;
   return useMemo(() => {
-    const { promise, observable } = subscription;
     return {
-      promise,
-      observable,
+      // this won't work with refetch/fetchMore...
+      subscription,
       fetchMore,
       refetch,
     };
   }, [subscription, fetchMore, refetch]);
 }
 
-export function useReadQuery<TData>(
-  promise: Promise<ApolloQueryResult<TData>>,
-  suspenseCache?: SuspenseCache
-) {
-  const _suspenseCache = suspenseCache || useSuspenseCache();
-  const prevPromise = useRef(promise);
+export function useReadQuery<TData>(subscription: QuerySubscription<TData>) {
+  const [, forceUpdate] = useState(0);
+  const promise =
+    subscription.promises[subscription.version] || subscription.promises.main;
 
-  if (prevPromise.current !== promise) {
-    invariant.warn(
-      'The promise you have provided is not stable across renders; this may cause `useReadQuery` to return incorrect data. If you are passing it via `options`, please ensure you are providing the same SuspenseCache to both `useBackgroundQuery` and `useReadQuery`.'
-    );
-  }
-
-  prevPromise.current = promise;
+  useEffect(() => {
+    return subscription.listen(() => {
+      forceUpdate((prevState) => prevState + 1);
+    });
+  }, [subscription]);
 
   const result = __use(promise);
-  const subscription = _suspenseCache.getSubscriptionFromPromise(promise);
-  return useSyncExternalStore(
-    subscription?.listen ||
-      (() => () => {
-        /* noop */
-      }),
-    () => subscription?.result || result,
-    () => subscription?.result || result
-  );
+
+  // TBD: refetch/fetchMore
+
+  return result;
 }
